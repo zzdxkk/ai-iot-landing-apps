@@ -28,7 +28,7 @@ for d in "$BASE"/0* "$BASE"/10-*; do
     rc=$?
     if [ $rc -ne 0 ]; then
       echo "    FAIL: $bn 退出码 $rc"
-      printf '%s\\n' "$out" | tail -6
+      printf '%s\n' "$out" | tail -6
       demo_ok=0
     elif [ -z "$out" ]; then
       echo "    FAIL: $bn 没有任何输出"
@@ -47,7 +47,7 @@ for d in "$BASE"/0* "$BASE"/10-*; do
     TOTAL_TESTS=$((TOTAL_TESTS + n))
   else
     echo "    FAIL: 单元测试未通过"
-    printf '%s\\n' "$out" | tail -10
+    printf '%s\n' "$out" | tail -10
     fail "$name 单元测试"
   fi
   [ $demo_ok -eq 0 ] && fail "$name 演示入口"
