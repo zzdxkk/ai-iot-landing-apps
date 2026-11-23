@@ -1,30 +1,29 @@
-# 01 · 企业知识库问答（RAG）
+# 01 · 中文知识库 RAG（BM25 检索 + 引用回溯）
 
 ## 解决什么问题
-公司制度、手册、FAQ 散在 PDF/Word 里，员工问一句话要翻半天，或者只能问行政。直接让大模型答又容易编，答完没人敢用——因为不知道依据在哪。
-
-这个工程把文档切块入库，提问时先检索、再从原文里给出答案，并把出处一起返回，人能自己核对。
+把一堆内部文档（手册、制度、FAQ）变成能回答问题的知识库，而且答案必须能指回原文位置，方便人工核对。难点不在接大模型，而在检索：中文要分词、切片不能截断语义、排序要能被解释。
 
 ## 怎么实现
-1. 切分：160 字滑窗、重叠 40 字，避免一句话被边界切断
-2. 向量化：64 维哈希向量（词袋），余弦相似度取 top-3
-3. 回答：从召回片段里按与问题的词重合度挑一句（抽取式），附 `source` 与分数
-4. 服务化：`src/server.py` 用标准库 `http.server` 提供 `POST /ask`、`GET /health`
+- `src/tokenizer.py`：英文按词、中文按二元组切分，带停用词表；纯标准库实现，不引入分词模型
+- `src/index.py`：`Chunk`（含 `start/end` 原文偏移）、按句末对齐的滑窗切片（相邻切片有重叠）、`BM25Index`（k1=1.5、b=0.75，倒排表 postings + 文档频次 df → idf）、`DocStore`（JSONL 追加写与加载）
+- `src/rag.py`：启动时从 JSONL 重建索引；`ask()` 先用 BM25 召回 top-k 切片，再在切片内做句子级重排（idf 加权重合度 / 句长平方根），返回答案时带 `chunk_id/source/start/end/score`
+- `src/server.py`：标准库 `http.server`，`/health`、`/stats`、`GET /search`、`POST /docs`、`POST /ask`；`PORT`、`DATA` 环境变量
+- `src/cli.py`：`ingest / search / ask` 三个子命令
 
 ## 跑起来
 ```bash
-python3 src/rag.py                          # 三个问题，看答案与引用
-python3 -m unittest discover -s tests -v    # 4 项
-python3 src/server.py                       # 默认 127.0.0.1:8080，可用 PORT 覆盖
-curl -s -X POST localhost:8080/ask \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"年假几天"}'
+python3 src/demo.py                        # 建库、检索、问答、验证持久化
+PORT=8080 DATA=data/docs.jsonl python3 src/server.py
+curl -s -X POST localhost:8080/ask -d '{"question":"年假几天"}'
+python3 src/cli.py ingest 员工手册.txt --source 手册
+python3 -m unittest discover -s tests -v   # 15 项
 ```
 
 ## 验证
-4 项单元测试覆盖：切分产生重叠、向量归一化、检索能召回相关片段、回答带引用。
-演示输出里三个问题都能给出答案和出处，例如「年假几天」→ 命中《员工手册.pdf》。
+15 项测试覆盖：中英文分词、停用词、切片偏移与原文一致、切片重叠、BM25 排序与 idf 方向、空查询、JSONL 重载后切片数一致、重复 doc_id 拒绝、引用偏移有效、无证据时不给引用、generator 钩子。
 
 ## 边界
-- 向量是哈希词袋，不是语义模型：换个说法（"休假天数"）不一定召回；接 bge/OpenAI 只需换掉 `HashEmbedder`
-- 回答是抽句，不是生成；没有 PDF/Word 解析、没有增量索引、没有权限控制
+- 生成答案默认是"抽句"（extractive），`ask(generator=...)` 才接模型；不内置任何模型调用
+- BM25 只做词面匹配，同义改写会漏；中文二元组会放大长词权重，效果弱于专用分词器
+- 切片偏移基于原文，`start/end` 直接可用来做高亮；JSONL 是单机追加写，多进程同时写会冲突
+- 没有权限控制、增量删除、向量检索与重排模型；`/docs` 无鉴权，只适合内网

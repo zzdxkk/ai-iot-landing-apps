@@ -1,36 +1,56 @@
-"""把 RAG 能力包成 HTTP 接口（标准库 http.server，无第三方依赖）。
-
-启动：python3 src/server.py            # 默认 127.0.0.1:8080
-      PORT=8099 python3 src/server.py  # 换端口
-调用：curl -X POST http://127.0.0.1:8080/ask \
-        -H 'Content-Type: application/json' \
-        -d '{"question":"年假几天"}'
-"""
-import json, os
+"""知识库 HTTP 服务：/health、/stats、POST /docs、POST /ask、GET /search。"""
+import json
+import os
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from rag import KnowledgeBase, answer
+from urllib.parse import parse_qs, urlparse
 
-kb = KnowledgeBase()
-kb.add("入职满一年享 5 天年假，满三年 10 天。社保公积金入职当月缴纳。", "员工手册.pdf")
-kb.add("差旅住宿：一线城市 500 元/晚，其他 350 元/晚，需发票。", "财务制度.docx")
+from rag import RAG
+
+KB = RAG(os.environ.get("DATA", "data/docs.jsonl"))
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path != "/health":
-            self.send_error(404); return
-        self._json({"ok": True, "docs": len(kb.docs)})
+        u = urlparse(self.path)
+        if u.path == "/health":
+            return self._json({"ok": True, "docs": len(KB.docs),
+                               "chunks": len(KB.index.chunks)})
+        if u.path == "/stats":
+            return self._json({"docs": len(KB.docs), "chunks": len(KB.index.chunks),
+                               "vocab": len(KB.index.df)})
+        if u.path == "/search":
+            q = (parse_qs(u.query).get("q") or [""])[0]
+            hits = KB.search(q, int((parse_qs(u.query).get("k") or ["3"])[0]))
+            return self._json({"query": q, "hits": [
+                {"chunk_id": c.chunk_id, "source": c.source, "score": round(s, 4),
+                 "text": c.text} for s, c in hits]})
+        self.send_error(404)
 
     def do_POST(self):
-        if self.path != "/ask":
-            self.send_error(404); return
+        u = urlparse(self.path)
         n = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(n) or b"{}")
-        self._json(answer(kb, body.get("question", "")))
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except json.JSONDecodeError:
+            return self._json({"error": "invalid json"}, 400)
+        if u.path == "/docs":
+            if not body.get("text"):
+                return self._json({"error": "text 必填"}, 400)
+            try:
+                doc_id = KB.add_document(body.get("source", "inline"),
+                                         body["text"], body.get("doc_id"))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 409)
+            return self._json({"doc_id": doc_id}, 201)
+        if u.path == "/ask":
+            return self._json(KB.ask(body.get("question", ""), int(body.get("top_k", 3)))
+                              if body.get("question") else {"answer": "", "citations": []})
+        self.send_error(404)
 
-    def _json(self, obj):
+    def _json(self, obj, status=200):
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
