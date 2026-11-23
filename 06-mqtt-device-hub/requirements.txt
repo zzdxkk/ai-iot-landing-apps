@@ -1,0 +1,2 @@
+# 无第三方依赖
+# 接真实 MQTT broker 后可加：paho-mqtt

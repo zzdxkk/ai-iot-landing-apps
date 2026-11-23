@@ -1,0 +1,2 @@
+# 无第三方依赖
+# 接真实串口/设备后可加：pyserial、pymodbus

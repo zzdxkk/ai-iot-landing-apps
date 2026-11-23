@@ -3,7 +3,7 @@ def render(result, cmp=None):
     lines = ["# 模型应用评测报告", "", f"样本数：**{result['n']}**", "", "## 汇总", "", "| 指标 | 得分 |", "| --- | --- |"]
     for k, v in result["summary"].items(): lines.append(f"| {k} | {v} |")
     lines += ["", "## 逐条明细", "", "| 用例 | " + " | ".join(result["summary"].keys()) + " |",
-              "| --- | " + " | ".join(["---"] * len(result["summary"]) + [" |"])]
+              "| --- | " + " | ".join(["---"] * len(result["summary"])) + " |"]
     for row in result["per_case"]:
         lines.append("| " + str(row["id"]) + " | " + " | ".join(str(row[k]) for k in result["summary"]) + " |")
     if cmp:
